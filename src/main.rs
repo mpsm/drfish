@@ -1,9 +1,11 @@
 use tokio::io::AsyncReadExt;
 use tokio::signal;
 
+mod read_line;
+
 const DEFAULT_SERIAL_PORT: &str = "/dev/ttyUSB0";
 const DEFAULT_BAUD_RATE: u32 = 115200;
-const DEFAULT_BUFFER_SIZE: usize = 512;
+const DEFAULT_BUFFER_SIZE: usize = 4096;
 
 async fn monitor_port(port_name: &String) {
     let port_builder = tokio_serial::new(port_name, DEFAULT_BAUD_RATE);
@@ -16,16 +18,25 @@ async fn monitor_port(port_name: &String) {
     };
 
     let mut buffer = vec![0; DEFAULT_BUFFER_SIZE];
-    let mut _output_line = String::new();
-
-    println!("Starting to read from serial port. Press CTRL-C to exit.");
+    let mut leftover_buffer = vec![0; DEFAULT_BUFFER_SIZE];
 
     loop {
         let read_result = serial_stream.read(&mut buffer).await;
         match read_result {
             Ok(n) => {
-                println!(">> Read {} bytes from serial port {}.", n, port_name);
-                buffer.clear();
+                if n == 0 {
+                    continue;
+                }
+
+                if leftover_buffer.len() > 0 {
+                    buffer.splice(0..0, leftover_buffer);
+                }
+
+                while let Ok(line) = read_line::read_line_from_buffer(&mut buffer) {
+                    println!("Received: {}", line);
+                }
+
+                leftover_buffer = buffer.clone();
             }
             Err(e) => {
                 println!("Failed to read from serial port: {}", e);

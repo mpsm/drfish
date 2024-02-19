@@ -1,4 +1,5 @@
 //use futures::channel::mpsc::UnboundedSender;
+use chrono;
 use tokio::io::AsyncReadExt;
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedSender;
@@ -13,6 +14,7 @@ const DEFAULT_BUFFER_SIZE: usize = 4096;
 struct PortMessage {
     port_name: String,
     message: String,
+    timestamp: chrono::DateTime<chrono::Local>,
 }
 
 async fn monitor_port(
@@ -53,6 +55,7 @@ async fn monitor_port(
                             let message = PortMessage {
                                 port_name: port_name.clone(),
                                 message: line,
+                                timestamp: chrono::Local::now(),
                             };
                             sender_queue.send(message).unwrap();
                         }
@@ -107,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             msg = receiver.recv() => {
                 if let Some(msg) = msg {
-                    print!(">> {}: {}", msg.port_name, msg.message);
+                    print!(">> [{}] | {}: {}", msg.timestamp, msg.port_name, msg.message);
                 }
             }
         }

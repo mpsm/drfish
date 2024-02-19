@@ -17,26 +17,23 @@ async fn monitor_port(port_name: &String) {
         }
     };
 
-    let mut buffer = vec![0; DEFAULT_BUFFER_SIZE];
-    let mut leftover_buffer = vec![0; DEFAULT_BUFFER_SIZE];
+    let mut recv_buffer = vec![0; DEFAULT_BUFFER_SIZE];
+    let mut process_buffer = vec![];
 
     loop {
-        let read_result = serial_stream.read(&mut buffer).await;
+        let read_result = serial_stream.read(&mut recv_buffer).await;
         match read_result {
             Ok(n) => {
                 if n == 0 {
                     continue;
                 }
 
-                if leftover_buffer.len() > 0 {
-                    buffer.splice(0..0, leftover_buffer);
-                }
+                // concatenate the new data to the process buffer
+                process_buffer.extend_from_slice(&recv_buffer[0..n]);
 
-                while let Ok(line) = read_line::read_line_from_buffer(&mut buffer) {
-                    println!("Received: {}", line);
+                while let Ok(line) = read_line::read_line_from_buffer(&mut process_buffer) {
+                    print!("{}\t| {}", port_name, line);
                 }
-
-                leftover_buffer = buffer.clone();
             }
             Err(e) => {
                 println!("Failed to read from serial port: {}", e);
@@ -50,17 +47,21 @@ async fn monitor_port(port_name: &String) {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("DrFish is a fish doctor! 🐟");
 
-    let port_name = std::env::args().nth(1).unwrap_or_else(|| {
+    let mut port_names = std::env::args().skip(1).collect::<Vec<_>>();
+    if port_names.is_empty() {
         println!(
             "No serial port name provided. Using default: {}",
             DEFAULT_SERIAL_PORT
         );
-        DEFAULT_SERIAL_PORT.to_string()
-    });
+        port_names.push(DEFAULT_SERIAL_PORT.to_string());
+    }
 
-    println!("Starting to read from serial port. Press CTRL-C to exit.");
+    println!("Starting to read from serial ports. Press CTRL-C to exit.");
 
-    tokio::spawn(async move { monitor_port(&port_name).await });
+    for port_name in port_names {
+        let port_name_clone = port_name.clone();
+        tokio::spawn(async move { monitor_port(&port_name_clone).await });
+    }
 
     loop {
         tokio::select! {

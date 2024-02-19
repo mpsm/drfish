@@ -1,5 +1,7 @@
+//use futures::channel::mpsc::UnboundedSender;
 use tokio::io::AsyncReadExt;
 use tokio::signal;
+use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 mod read_line;
@@ -8,7 +10,11 @@ const DEFAULT_SERIAL_PORT: &str = "/dev/ttyUSB0";
 const DEFAULT_BAUD_RATE: u32 = 115200;
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 
-async fn monitor_port(port_name: &String, cancel_token: CancellationToken) {
+async fn monitor_port(
+    port_name: &String,
+    cancel_token: CancellationToken,
+    sender_queue: UnboundedSender<String>,
+) {
     let port_builder = tokio_serial::new(port_name, DEFAULT_BAUD_RATE);
     let mut serial_stream = match tokio_serial::SerialStream::open(&port_builder) {
         Ok(s) => s,
@@ -39,7 +45,7 @@ async fn monitor_port(port_name: &String, cancel_token: CancellationToken) {
                         process_buffer.extend_from_slice(&recv_buffer[0..n]);
 
                         while let Some(line) = read_line::read_line_from_buffer(&mut process_buffer) {
-                            print!("{}\t| {}", port_name, line);
+                            sender_queue.send(line).unwrap();
                         }
                     }
                     Err(e) => {
@@ -69,12 +75,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut handles = Vec::new();
     let cancel_signal = CancellationToken::new();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
 
     for port_name in port_names {
         let port_name_clone = port_name.clone();
         let cancel_signal_clone = cancel_signal.clone();
-        let handle =
-            tokio::spawn(async move { monitor_port(&port_name_clone, cancel_signal_clone).await });
+        let sender_clone = sender.clone();
+        let handle = tokio::spawn(async move {
+            monitor_port(&port_name_clone, cancel_signal_clone, sender_clone).await
+        });
         handles.push(handle);
     }
 
@@ -85,6 +94,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 cancel_signal.cancel();
                 break;
+            }
+
+            line = receiver.recv() => {
+                if let Some(line) = line {
+                    print!(">> {}", line);
+                }
             }
         }
     }

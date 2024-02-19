@@ -1,5 +1,7 @@
 //use futures::channel::mpsc::UnboundedSender;
 use chrono;
+use std::fs::OpenOptions;
+use std::io::Write;
 use tokio::io::AsyncReadExt;
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedSender;
@@ -99,6 +101,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handles.push(handle);
     }
 
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let log_file_name = format!("log_{}.txt", timestamp);
+    let mut log_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(true)
+        .open(&log_file_name)?;
+
     loop {
         tokio::select! {
             _ = signal::ctrl_c() => {
@@ -110,7 +120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             msg = receiver.recv() => {
                 if let Some(msg) = msg {
-                    print!(">> [{}] | {}: {}", msg.timestamp, msg.port_name, msg.message);
+                    let log_msg = format!(">> [{}] | {}: {}", msg.timestamp, msg.port_name, msg.message);
+                    print!("{}", &log_msg);
+                    write!(log_file, "{}", &log_msg)?;
                 }
             }
         }

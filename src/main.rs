@@ -10,10 +10,15 @@ const DEFAULT_SERIAL_PORT: &str = "/dev/ttyUSB0";
 const DEFAULT_BAUD_RATE: u32 = 115200;
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 
+struct PortMessage {
+    port_name: String,
+    message: String,
+}
+
 async fn monitor_port(
     port_name: &String,
     cancel_token: CancellationToken,
-    sender_queue: UnboundedSender<String>,
+    sender_queue: UnboundedSender<PortMessage>,
 ) {
     let port_builder = tokio_serial::new(port_name, DEFAULT_BAUD_RATE);
     let mut serial_stream = match tokio_serial::SerialStream::open(&port_builder) {
@@ -45,7 +50,11 @@ async fn monitor_port(
                         process_buffer.extend_from_slice(&recv_buffer[0..n]);
 
                         while let Some(line) = read_line::read_line_from_buffer(&mut process_buffer) {
-                            sender_queue.send(line).unwrap();
+                            let message = PortMessage {
+                                port_name: port_name.clone(),
+                                message: line,
+                            };
+                            sender_queue.send(message).unwrap();
                         }
                     }
                     Err(e) => {
@@ -75,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut handles = Vec::new();
     let cancel_signal = CancellationToken::new();
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<PortMessage>();
 
     for port_name in port_names {
         let port_name_clone = port_name.clone();
@@ -96,9 +105,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
 
-            line = receiver.recv() => {
-                if let Some(line) = line {
-                    print!(">> {}", line);
+            msg = receiver.recv() => {
+                if let Some(msg) = msg {
+                    print!(">> {}: {}", msg.port_name, msg.message);
                 }
             }
         }

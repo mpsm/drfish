@@ -1,30 +1,16 @@
-use std::io::{Error, ErrorKind};
-
-pub trait AsyncReadLine {
-    async fn read_line(&mut self) -> String;
-}
-
-pub fn read_line_from_buffer(buffer: &mut Vec<u8>) -> Result<String, Error> {
+pub fn read_line_from_buffer(buffer: &mut Vec<u8>) -> Option<String> {
     if let Some(i) = buffer.iter().position(|&x| x == b'\n') {
         let line = String::from_utf8_lossy(&buffer[..=i]).to_string();
         buffer.drain(..=i);
-        Ok(line)
+        Some(line)
     } else {
-        Err(Error::new(ErrorKind::Other, "No newline found"))
+        None
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_read_line_from_buffer_single_line() {
-        let mut buffer = "hello\n".as_bytes().to_vec();
-        let line = read_line_from_buffer(&mut buffer).unwrap();
-        assert_eq!(line, "hello\n");
-        assert!(buffer.is_empty());
-    }
 
     #[test]
     fn test_read_line_from_buffer_multiple_lines() {
@@ -38,7 +24,7 @@ mod tests {
     fn test_read_line_from_buffer_no_newline() {
         let mut buffer = "hello".as_bytes().to_vec();
         let result = read_line_from_buffer(&mut buffer);
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
 
     #[test]

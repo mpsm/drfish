@@ -1,29 +1,30 @@
+use super::data::SerialPortSettings;
 use super::log_monitor::{AsyncLogMonitor, Log};
 use super::read_line;
+
 use chrono;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_serial::SerialStream;
 use tokio_util::sync::CancellationToken;
 
-const DEFAULT_BAUD_RATE: u32 = 115_200;
 const DEFAULT_BUFFER_SIZE: usize = 4096;
 
 pub struct SerialLogMonitor {
-    port_path: String,
+    port_settings: SerialPortSettings,
     serial_stream: SerialStream,
 }
 
 impl SerialLogMonitor {
-    pub fn new(port_path: &str) -> Result<SerialLogMonitor, String> {
-        let port_builder = tokio_serial::new(port_path, DEFAULT_BAUD_RATE);
+    pub fn new(port_settings: SerialPortSettings) -> Result<SerialLogMonitor, String> {
+        let port_builder = tokio_serial::new(port_settings.path.clone(), port_settings.baud_rate);
         let serial_stream = match tokio_serial::SerialStream::open(&port_builder) {
             Ok(s) => s,
             Err(e) => return Err(format!("Failed to open serial port: {}", e)),
         };
 
         Ok(SerialLogMonitor {
-            port_path: port_path.to_string(),
+            port_settings: port_settings,
             serial_stream: serial_stream,
         })
     }
@@ -31,7 +32,7 @@ impl SerialLogMonitor {
 
 impl AsyncLogMonitor for SerialLogMonitor {
     fn get_common_name(&self) -> String {
-        self.port_path.clone()
+        self.port_settings.path.clone()
     }
 
     async fn monitor(
@@ -42,10 +43,15 @@ impl AsyncLogMonitor for SerialLogMonitor {
         let mut recv_buffer = vec![0; DEFAULT_BUFFER_SIZE];
         let mut process_buffer = vec![];
 
+        println!(
+            "Starting {} port monitor @ {}",
+            self.port_settings.path, self.port_settings.baud_rate
+        );
+
         loop {
             tokio::select! {
                 _ = cancel_token.cancelled() => {
-                    println!("Closing {} port monitor", self.port_path);
+                    println!("Closing {} port monitor", self.port_settings.path);
                     return;
                 }
 

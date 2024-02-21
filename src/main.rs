@@ -4,25 +4,25 @@ use std::io::Write;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 
+mod cli;
+mod data;
 mod log_monitor;
 mod read_line;
 mod serial_monitor;
 
 use log_monitor::AsyncLogMonitor;
 
-const DEFAULT_SERIAL_PORT: &str = "/dev/ttyUSB0";
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("DrFish is a fish doctor! 🐟");
 
-    let mut port_names = std::env::args().skip(1).collect::<Vec<_>>();
-    if port_names.is_empty() {
-        println!(
-            "No serial port name provided. Using default: {}",
-            DEFAULT_SERIAL_PORT
-        );
-        port_names.push(DEFAULT_SERIAL_PORT.to_string());
+    let port_configuration = cli::get_port_configuration();
+    match port_configuration {
+        Ok(_) => {}
+        Err(e) => {
+            println!("Error: {}", e);
+            std::process::exit(1);
+        }
     }
 
     println!("Starting to read from serial ports. Press CTRL-C to exit.");
@@ -31,11 +31,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cancel_signal = CancellationToken::new();
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<log_monitor::Log>();
 
-    for port_name in port_names {
-        //let port_name_clone = port_name.clone();
+    for port in port_configuration.unwrap() {
         let cancel_signal_clone = cancel_signal.clone();
         let sender_clone = sender.clone();
-        let mut port_monitor = serial_monitor::SerialLogMonitor::new(&port_name)?;
+        let mut port_monitor = serial_monitor::SerialLogMonitor::new(port)?;
         let handle = tokio::spawn(async move {
             port_monitor
                 .monitor(cancel_signal_clone, sender_clone)

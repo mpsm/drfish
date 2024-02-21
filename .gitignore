@@ -14,4 +14,4 @@ Cargo.lock
 *.pdb
 
 # log files
-log_*
+log_*.txt

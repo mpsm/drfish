@@ -66,9 +66,10 @@ impl AsyncLogMonitor for SerialLogMonitor {
                             process_buffer.extend_from_slice(&recv_buffer[0..n]);
 
                             while let Some(line) = read_line::read_line_from_buffer(&mut process_buffer) {
+                                let stripped_line = line.trim().to_string();
                                 let message = Log {
                                     source_name: self.get_common_name(),
-                                    message: line,
+                                    message: stripped_line,
                                     timestamp: chrono::Local::now(),
                                 };
                                 sender_queue.send(message).unwrap();

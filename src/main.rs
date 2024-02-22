@@ -1,7 +1,9 @@
 use chrono;
 use std::fs::OpenOptions;
+use std::io::Error;
 use std::io::Write;
-use tokio::signal;
+use termion::input::TermRead;
+use termion::raw::IntoRawMode;
 use tokio_util::sync::CancellationToken;
 
 mod cli;
@@ -11,6 +13,23 @@ mod read_line;
 mod serial_monitor;
 
 use log_monitor::AsyncLogMonitor;
+
+/// Asynchronously gets single key from the user.
+async fn get_key(
+    stdin: &mut termion::input::Keys<termion::AsyncReader>,
+) -> Result<termion::event::Key, Error> {
+    loop {
+        match stdin.next() {
+            Some(c) => {
+                return c;
+            }
+            None => {
+                // wait for the next key
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            }
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,20 +70,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .append(true)
         .open(&log_file_name)?;
 
+    let _stdout = std::io::stdout().into_raw_mode().unwrap();
+    let mut stdin = termion::async_stdin().keys();
+
     loop {
         tokio::select! {
-            _ = signal::ctrl_c() => {
-                println!(">> Received CTRL-C. Exiting...");
-
-                cancel_signal.cancel();
-                break;
-            }
-
             msg = receiver.recv() => {
                 if let Some(msg) = msg {
-                    let log_msg = format!(">> [{}] | {}: {}", msg.timestamp, msg.source_name, msg.message);
+                    let log_msg = format!(">> [{}] | {}: {}\r\n", msg.timestamp, msg.source_name, msg.message);
                     print!("{}", &log_msg);
                     write!(log_file, "{}", &log_msg)?;
+                }
+            }
+
+            key = get_key(&mut stdin) => {
+                match key {
+                    Ok(termion::event::Key::Ctrl('x')) => {
+                        print!("Exiting...\r\n");
+                        cancel_signal.cancel();
+                        break;
+                    }
+                    Ok(c) => {
+                        print!("Key pressed: {:?}\r\n", c);
+                    }
+                    Err(e) => {
+                        print!("Error: {}\r\n", e);
+                    }
                 }
             }
         }

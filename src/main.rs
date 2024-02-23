@@ -35,14 +35,13 @@ async fn get_key(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("DrFish is a fish doctor! 🐟");
 
-    let port_configuration = cli::get_port_configuration();
-    match port_configuration {
-        Ok(_) => {}
+    let port_configuration = match cli::get_port_configuration() {
+        Ok(cfg) => cfg,
         Err(e) => {
             println!("Error: {}", e);
             std::process::exit(1);
         }
-    }
+    };
 
     println!("Starting to read from serial ports. Press CTRL-C to exit.");
 
@@ -50,10 +49,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cancel_signal = CancellationToken::new();
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<log_monitor::Log>();
 
-    for port in port_configuration.unwrap() {
+    // map to store the write proxies for each port
+    let mut write_proxies = std::collections::HashMap::new();
+
+    for port in &port_configuration {
         let cancel_signal_clone = cancel_signal.clone();
         let sender_clone = sender.clone();
-        let mut port_monitor = serial_monitor::SerialLogMonitor::new(port)?;
+        let mut port_monitor = serial_monitor::SerialLogMonitor::new(port.clone())?;
+        let write_proxy = port_monitor.get_write_proxy();
+        write_proxies.insert(port_monitor.get_common_name(), write_proxy);
+
         let handle = tokio::spawn(async move {
             port_monitor
                 .monitor(cancel_signal_clone, sender_clone)
@@ -61,6 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         handles.push(handle);
     }
+
+    let active_writer = &port_configuration[0];
 
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
     let log_file_name = format!("log_{}.txt", timestamp);
@@ -83,6 +90,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            _ = tokio::signal::ctrl_c() => {
+                print!("Captured Ctrl+c, bye fisherman!\r\n");
+                break;
+            }
+
             key = get_key(&mut stdin) => {
                 match key {
                     Ok(termion::event::Key::Ctrl('x')) => {
@@ -91,7 +103,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         break;
                     }
                     Ok(c) => {
-                        print!("Key pressed: {:?}\r\n", c);
+                        let writer_proxy = write_proxies.get(&active_writer.path).unwrap();
+                        match c {
+                            termion::event::Key::Char(c) => {
+                                // FIXME: this is a hack to send CRLF to the serial port
+                                if c == '\n' {
+                                    writer_proxy.send('\r' as u8);
+                                }
+
+                                writer_proxy.send(c as u8);
+                            }
+                            _ => {}
+                        }
                     }
                     Err(e) => {
                         print!("Error: {}\r\n", e);

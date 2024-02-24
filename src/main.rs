@@ -11,6 +11,7 @@ mod data;
 mod log_monitor;
 mod read_line;
 mod serial_monitor;
+mod writer;
 
 use log_monitor::AsyncLogMonitor;
 
@@ -50,15 +51,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (sender, mut receiver) =
         tokio::sync::mpsc::unbounded_channel::<log_monitor::MonitorMessage>();
 
-    // map to store the write proxies for each port
-    let mut write_proxies = std::collections::HashMap::new();
+    let mut writer = writer::Writer::new();
 
     for port in &port_configuration {
         let cancel_signal_clone = cancel_signal.clone();
         let sender_clone = sender.clone();
         let mut port_monitor = serial_monitor::SerialLogMonitor::new(port.clone())?;
         let write_proxy = port_monitor.get_write_proxy();
-        write_proxies.insert(port_monitor.get_common_name(), write_proxy);
+        writer.add_write_proxy(port.path.clone(), write_proxy);
 
         let handle = tokio::spawn(async move {
             port_monitor
@@ -67,8 +67,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         handles.push(handle);
     }
-
-    let active_writer = &port_configuration[0];
 
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
     let log_file_name = format!("log_{}.txt", timestamp);
@@ -120,17 +118,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         cancel_signal.cancel();
                         break;
                     }
-                    Ok(c) => {
-                        let writer_proxy = write_proxies.get(&active_writer.path).unwrap();
-                        match c {
+                    Ok(key) => {
+                        match key {
                             termion::event::Key::Char(c) => {
                                 // FIXME: this is a hack to send CRLF to the serial port
                                 if c == '\n' {
-                                    writer_proxy.send('\r' as u8);
+                                    writer.write_key(termion::event::Key::Char('\r'));
                                     continue;
                                 }
 
-                                writer_proxy.send(c as u8);
+                                writer.write_key(key);
+                            }
+                            termion::event::Key::Ctrl('z') => {
+                                let new_writer_name = writer.switch_to_next_writer();
+                                match new_writer_name {
+                                    Some(_) => {
+                                        print!("Switching to {}\r\n", new_writer_name.unwrap());
+                                    }
+                                    None => {
+                                        print!("No other writer available\r\n");
+                                    }
+                                }
                             }
                             _ => {}
                         }

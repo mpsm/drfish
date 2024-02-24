@@ -1,7 +1,77 @@
-use super::data;
+use crate::data;
+use crate::log_monitor;
+use crate::serial_monitor;
+use crate::writer;
+
+use log_monitor::AsyncLogMonitor;
+use tokio_util::sync::CancellationToken;
 
 const DEFAULT_SERIAL_PORT: &str = "/dev/ttyUSB0";
 const DEFAULT_BAUD_RATE: u32 = 115_200;
+
+pub struct DrFishCli {
+    pub port_configuration: Vec<data::SerialPortSettings>,
+    pub writer: writer::Writer,
+
+    sender: tokio::sync::mpsc::UnboundedSender<log_monitor::MonitorMessage>,
+    receiver: tokio::sync::mpsc::UnboundedReceiver<log_monitor::MonitorMessage>,
+    cancel_signal: tokio_util::sync::CancellationToken,
+    handles: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl DrFishCli {
+    pub fn new() -> Result<DrFishCli, String> {
+        let port_configuration = match get_port_configuration() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
+        let writer = writer::Writer::new();
+        let (sender, receiver) =
+            tokio::sync::mpsc::unbounded_channel::<log_monitor::MonitorMessage>();
+        let cancel_signal = CancellationToken::new();
+        let handles = Vec::new();
+
+        Ok(DrFishCli {
+            port_configuration: port_configuration,
+            writer: writer,
+            sender: sender,
+            receiver: receiver,
+            cancel_signal: cancel_signal,
+            handles: handles,
+        })
+    }
+
+    pub fn spawn_monitors(&mut self) {
+        for port in &self.port_configuration {
+            let cancel_signal_clone = self.cancel_signal.clone();
+            let sender_clone = self.sender.clone();
+            let mut port_monitor = serial_monitor::SerialLogMonitor::new(port.clone()).unwrap();
+            let write_proxy = port_monitor.get_write_proxy();
+            self.writer.add_write_proxy(port.path.clone(), write_proxy);
+
+            let handle = tokio::spawn(async move {
+                port_monitor
+                    .monitor(cancel_signal_clone, sender_clone)
+                    .await;
+            });
+            self.handles.push(handle);
+        }
+    }
+
+    pub async fn stop_monitors(&mut self) {
+        self.cancel_signal.cancel();
+        for handle in &mut self.handles {
+            handle.await.unwrap();
+        }
+    }
+
+    pub async fn recieve_monitor_message(&mut self) -> Option<log_monitor::MonitorMessage> {
+        self.receiver.recv().await
+    }
+}
 
 fn parse_port_arg(arg: &str) -> Result<data::SerialPortSettings, String> {
     if arg.is_empty() {

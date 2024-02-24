@@ -4,7 +4,6 @@ use std::io::Error;
 use std::io::Write;
 use termion::input::TermRead;
 use termion::raw::IntoRawMode;
-use tokio_util::sync::CancellationToken;
 
 mod cli;
 mod data;
@@ -12,8 +11,6 @@ mod log_monitor;
 mod read_line;
 mod serial_monitor;
 mod writer;
-
-use log_monitor::AsyncLogMonitor;
 
 /// Asynchronously gets single key from the user.
 async fn get_key(
@@ -36,8 +33,8 @@ async fn get_key(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("DrFish is a fish doctor! 🐟");
 
-    let port_configuration = match cli::get_port_configuration() {
-        Ok(cfg) => cfg,
+    let mut dr_fish = match cli::DrFishCli::new() {
+        Ok(cli) => cli,
         Err(e) => {
             println!("Error: {}", e);
             std::process::exit(1);
@@ -46,27 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting to read from serial ports. Press CTRL-C to exit.");
 
-    let mut handles = Vec::new();
-    let cancel_signal = CancellationToken::new();
-    let (sender, mut receiver) =
-        tokio::sync::mpsc::unbounded_channel::<log_monitor::MonitorMessage>();
-
-    let mut writer = writer::Writer::new();
-
-    for port in &port_configuration {
-        let cancel_signal_clone = cancel_signal.clone();
-        let sender_clone = sender.clone();
-        let mut port_monitor = serial_monitor::SerialLogMonitor::new(port.clone())?;
-        let write_proxy = port_monitor.get_write_proxy();
-        writer.add_write_proxy(port.path.clone(), write_proxy);
-
-        let handle = tokio::spawn(async move {
-            port_monitor
-                .monitor(cancel_signal_clone, sender_clone)
-                .await;
-        });
-        handles.push(handle);
-    }
+    dr_fish.spawn_monitors();
 
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
     let log_file_name = format!("log_{}.txt", timestamp);
@@ -83,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         tokio::select! {
-            msg = receiver.recv() => {
+            msg = dr_fish.recieve_monitor_message() => {
                 if let Some(msg) = msg {
                     match msg {
                         log_monitor::MonitorMessage::UnsolictedMessage(msg) => {
@@ -115,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match key {
                     Ok(termion::event::Key::Ctrl('x')) => {
                         print!("Exiting...\r\n");
-                        cancel_signal.cancel();
+                        dr_fish.stop_monitors().await;
                         break;
                     }
                     Ok(key) => {
@@ -123,14 +100,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             termion::event::Key::Char(c) => {
                                 // FIXME: this is a hack to send CRLF to the serial port
                                 if c == '\n' {
-                                    writer.write_key(termion::event::Key::Char('\r'));
+                                    dr_fish.writer.write_key(termion::event::Key::Char('\r'));
                                     continue;
                                 }
 
-                                writer.write_key(key);
+                                dr_fish.writer.write_key(key);
                             }
                             termion::event::Key::Ctrl('z') => {
-                                let new_writer_name = writer.switch_to_next_writer();
+                                let new_writer_name = dr_fish.writer.switch_to_next_writer();
                                 match new_writer_name {
                                     Some(_) => {
                                         print!("Switching to {}\r\n", new_writer_name.unwrap());
@@ -149,10 +126,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-    }
-
-    for handle in handles {
-        handle.await?;
     }
 
     Ok(())

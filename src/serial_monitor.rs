@@ -7,6 +7,7 @@ use super::read_line;
 use chrono;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::time::error::Elapsed;
 use tokio_serial::{SerialPort, SerialStream};
 use tokio_util::sync::CancellationToken;
 
@@ -20,6 +21,8 @@ pub struct SerialLogMonitor {
     serial_stream: SerialStream,
     write_receiver: UnboundedReceiver<u8>,
     write_sender: UnboundedSender<u8>,
+    recv_buffer: Vec<u8>,
+    process_buffer: Vec<u8>,
 }
 
 pub struct SerialLogMonitorWriteProxy {
@@ -52,16 +55,93 @@ impl SerialLogMonitor {
 
         let (write_sender, write_receiver) = tokio::sync::mpsc::unbounded_channel::<u8>();
 
+        let recv_buffer = vec![0; DEFAULT_BUFFER_SIZE];
+        let process_buffer = vec![];
+
         Ok(SerialLogMonitor {
             port_settings: port_settings,
             serial_stream: serial_stream,
             write_receiver: write_receiver,
             write_sender: write_sender,
+            recv_buffer: recv_buffer,
+            process_buffer: process_buffer,
         })
     }
 
     pub fn get_write_proxy(&self) -> SerialLogMonitorWriteProxy {
         SerialLogMonitorWriteProxy::new(self.write_sender.clone())
+    }
+
+    async fn write_byte(&mut self, data: u8) -> Result<(), String> {
+        match self.serial_stream.write(&[data]).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to write to serial port: {}", e)),
+        }
+    }
+
+    async fn handle_write_request(&mut self, data: Option<u8>) {
+        if let Some(byte) = data {
+            self.write_byte(byte).await.unwrap();
+        }
+    }
+
+    async fn handle_read_timeout(&mut self, sender_queue: &UnboundedSender<MonitorMessage>) {
+        if self.process_buffer.len() == 0 {
+            return;
+        }
+
+        let unsolicted_msg = String::from_utf8_lossy(self.process_buffer.as_slice()).to_string();
+        self.process_buffer.clear();
+        sender_queue
+            .send(log_monitor::MonitorMessage::UnsolictedMessage(
+                unsolicted_msg,
+            ))
+            .unwrap();
+    }
+
+    async fn handle_incomming_data(
+        &mut self,
+        n: usize,
+        sender_queue: &UnboundedSender<MonitorMessage>,
+    ) {
+        if n == 0 {
+            return;
+        }
+
+        // concatenate the new data to the process buffer
+        self.process_buffer
+            .extend_from_slice(&self.recv_buffer[0..n]);
+
+        while let Some(line) = read_line::read_line_from_buffer(&mut self.process_buffer) {
+            let stripped_line = line.trim().to_string();
+            let message = Log {
+                source_name: self.get_common_name(),
+                message: stripped_line,
+                timestamp: chrono::Local::now(),
+            };
+            sender_queue.send(MonitorMessage::Log(message)).unwrap();
+        }
+    }
+
+    async fn handle_read_result(
+        &mut self,
+        read_result: Result<Result<usize, tokio::io::Error>, Elapsed>,
+        sender_queue: &UnboundedSender<MonitorMessage>,
+    ) {
+        match read_result {
+            Ok(Ok(n)) => {
+                self.handle_incomming_data(n, sender_queue).await;
+            }
+            // timweout
+            Err(_) => {
+                self.handle_read_timeout(sender_queue).await;
+            }
+
+            // FIXME: handle the error
+            Ok(Err(_)) => {
+                return;
+            }
+        }
     }
 }
 
@@ -75,9 +155,6 @@ impl AsyncLogMonitor for SerialLogMonitor {
         cancel_token: CancellationToken,
         sender_queue: UnboundedSender<MonitorMessage>,
     ) {
-        let mut recv_buffer = vec![0; DEFAULT_BUFFER_SIZE];
-        let mut process_buffer = vec![];
-
         print!(
             "Starting {} port monitor @ {}\r\n",
             self.port_settings.path, self.port_settings.baud_rate
@@ -89,59 +166,15 @@ impl AsyncLogMonitor for SerialLogMonitor {
                     return;
                 }
 
-                write_result = self.write_receiver.recv() => {
-                    match write_result {
-                        Some(data) => {
-                            match self.serial_stream.write(&[data]).await {
-                                Ok(_) => {}
-                                Err(_) => {
-                                    continue;
-                                }
-                            }
-                        }
-                        None => {
-                            continue;
-                        }
-                    }
+                write_data = self.write_receiver.recv() => {
+                    self.handle_write_request(write_data).await;
                 }
 
                 read_result = tokio::time::timeout(
                     std::time::Duration::from_millis(BUFFER_COMPLETION_TIMEOUT),
-                    self.serial_stream.read(&mut recv_buffer),
+                    self.serial_stream.read(&mut self.recv_buffer),
                 ) => {
-                    match read_result {
-                        Ok(Ok(n)) => {
-                            if n == 0 {
-                                continue;
-                            }
-
-                            // concatenate the new data to the process buffer
-                            process_buffer.extend_from_slice(&recv_buffer[0..n]);
-
-                            while let Some(line) = read_line::read_line_from_buffer(&mut process_buffer) {
-                                let stripped_line = line.trim().to_string();
-                                let message = Log {
-                                    source_name: self.get_common_name(),
-                                    message: stripped_line,
-                                    timestamp: chrono::Local::now(),
-                                };
-                                sender_queue.send(MonitorMessage::Log(message)).unwrap();
-                            }
-                        }
-                        // FIXME: handle the error
-                        Ok(Err(_)) => {
-                            continue;
-                        }
-                        Err(_) => {
-                            if process_buffer.len() == 0 {
-                                continue;
-                            }
-
-                            let unsolicted_msg = String::from_utf8_lossy(process_buffer.as_slice()).to_string();
-                            process_buffer.clear();
-                            sender_queue.send(log_monitor::MonitorMessage::UnsolictedMessage(unsolicted_msg)).unwrap();
-                        }
-                    }
+                    self.handle_read_result(read_result, &sender_queue).await;
                 }
             }
         }

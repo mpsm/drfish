@@ -6,7 +6,10 @@ Doctor Fish - a serial port monitor and log analyzer in the future.
 
 To build and install the app, first [setup rust compiler](https://www.rust-lang.org/tools/install).
 
-`drfish` uses `serialport` crate under the hood that require following dependencies on Ubuntu
+`drfish` uses `serialport` crate under the hood that require following dependencies on Ubuntu:
+```bash
+sudo apt install pkg-config libudev-dev
+```
 
 For other systems please refer to [`serialport`](https://github.com/serialport/serialport-rs) crate documentation.
 

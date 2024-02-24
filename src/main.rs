@@ -47,7 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut handles = Vec::new();
     let cancel_signal = CancellationToken::new();
-    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<log_monitor::Log>();
+    let (sender, mut receiver) =
+        tokio::sync::mpsc::unbounded_channel::<log_monitor::MonitorMessage>();
 
     // map to store the write proxies for each port
     let mut write_proxies = std::collections::HashMap::new();
@@ -77,16 +78,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .append(true)
         .open(&log_file_name)?;
 
-    let _stdout = std::io::stdout().into_raw_mode().unwrap();
+    let mut stdout = std::io::stdout().into_raw_mode().unwrap();
     let mut stdin = termion::async_stdin().keys();
+
+    let mut last_msg_was_unsolicited = false;
 
     loop {
         tokio::select! {
             msg = receiver.recv() => {
                 if let Some(msg) = msg {
-                    let log_msg = format!(">> [{}] | {}: {}\r\n", msg.timestamp, msg.source_name, msg.message);
-                    print!("{}", &log_msg);
-                    write!(log_file, "{}", &log_msg)?;
+                    match msg {
+                        log_monitor::MonitorMessage::UnsolictedMessage(msg) => {
+                            print!("{}", msg);
+                            stdout.flush()?;
+                            last_msg_was_unsolicited = true;
+                        }
+                        log_monitor::MonitorMessage::Log(msg) => {
+                            if last_msg_was_unsolicited {
+                                print!("\r\n");
+                            }
+                            let log_msg = format!(">> [{}] | {}: {}\r\n", msg.timestamp, msg.source_name, msg.message);
+                            print!("{}", &log_msg);
+                            write!(log_file, "{}", &log_msg)?;
+                            stdout.flush()?;
+                            last_msg_was_unsolicited = false;
+                        }
+
+                    }
                 }
             }
 
@@ -109,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // FIXME: this is a hack to send CRLF to the serial port
                                 if c == '\n' {
                                     writer_proxy.send('\r' as u8);
+                                    continue;
                                 }
 
                                 writer_proxy.send(c as u8);

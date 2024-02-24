@@ -2,10 +2,17 @@ use chrono;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
+#[derive(Debug)]
 pub struct Log {
     pub source_name: String,
     pub message: String,
     pub timestamp: chrono::DateTime<chrono::Local>,
+}
+
+#[derive(Debug)]
+pub enum MonitorMessage {
+    Log(Log),
+    UnsolictedMessage(String),
 }
 
 pub trait AsyncLogMonitor {
@@ -13,6 +20,6 @@ pub trait AsyncLogMonitor {
     async fn monitor(
         &mut self,
         cancel_token: CancellationToken,
-        sender_queue: UnboundedSender<Log>,
+        sender_queue: UnboundedSender<MonitorMessage>,
     );
 }

@@ -1,5 +1,6 @@
 use crate::data;
 use crate::log_monitor;
+use crate::logging;
 use crate::serial_monitor;
 use crate::writer;
 
@@ -11,18 +12,30 @@ const DEFAULT_BAUD_RATE: u32 = 115_200;
 
 pub struct DrFishCli {
     pub port_configuration: Vec<data::SerialPortSettings>,
-    pub writer: writer::Writer,
+    pub logger: logging::Logger,
 
+    writer: writer::Writer,
     sender: tokio::sync::mpsc::UnboundedSender<log_monitor::MonitorMessage>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<log_monitor::MonitorMessage>,
     cancel_signal: tokio_util::sync::CancellationToken,
     handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
+pub enum CliAction {
+    Break,
+}
+
 impl DrFishCli {
     pub fn new() -> Result<DrFishCli, String> {
         let port_configuration = match get_port_configuration() {
             Ok(cfg) => cfg,
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
+        let logger = match logging::Logger::new() {
+            Ok(l) => l,
             Err(e) => {
                 return Err(e);
             }
@@ -41,6 +54,7 @@ impl DrFishCli {
             receiver: receiver,
             cancel_signal: cancel_signal,
             handles: handles,
+            logger: logger,
         })
     }
 
@@ -70,6 +84,42 @@ impl DrFishCli {
 
     pub async fn recieve_monitor_message(&mut self) -> Option<log_monitor::MonitorMessage> {
         self.receiver.recv().await
+    }
+
+    pub async fn handle_key_press(&mut self, key: termion::event::Key) -> Option<CliAction> {
+        match key {
+            termion::event::Key::Ctrl('x') => {
+                print!("Exiting...\r\n");
+                self.stop_monitors().await;
+                return Some(CliAction::Break);
+            }
+
+            termion::event::Key::Ctrl('z') => {
+                let new_writer_name = self.writer.switch_to_next_writer();
+                match new_writer_name {
+                    Some(_) => {
+                        print!("Switching to {}\r\n", new_writer_name.unwrap());
+                    }
+                    None => {
+                        print!("No other writer available\r\n");
+                    }
+                }
+            }
+
+            termion::event::Key::Char(c) => {
+                // FIXME: this is a hack to send CRLF to the serial port
+                if c == '\n' {
+                    self.writer.write_key(termion::event::Key::Char('\r'));
+                    return None;
+                }
+
+                self.writer.write_key(key);
+            }
+
+            _ => {}
+        }
+
+        None
     }
 }
 

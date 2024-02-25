@@ -2,6 +2,8 @@
 name = "drfish"
 version = "0.2.0"
 edition = "2021"
+license = "MIT"
+authors = ["Marcin Smoczyński <smoczynski.marcin@gmail.com>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

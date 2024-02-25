@@ -1,4 +1,7 @@
-# Doctor Fish [![Rust CI](https://github.com/mpsm/drfish/actions/workflows/rust.yml/badge.svg)](https://github.com/mpsm/drfish/actions/workflows/rust.yml)
+# Doctor Fish
+[![CI](https://github.com/mpsm/drfish/actions/workflows/rust.yml/badge.svg)](https://github.com/mpsm/drfish/actions/workflows/rust.yml)
+[![GitHub Release](https://img.shields.io/github/release/mpsm/drfish.svg?style=flat)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Doctor Fish is a serial port monitor that will also serve as a log analyzer in the future.
 

@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    println!("Starting to read from serial ports. Press CTRL-C to exit.");
+    println!("Starting to read from serial ports. Press CTRL-X to exit and CTRL-Z to switch input.");
 
     dr_fish.spawn_monitors();
 

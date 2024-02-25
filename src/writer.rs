@@ -64,6 +64,10 @@ impl Writer {
             termion::event::Key::Char(c) => {
                 current_writer.send(c as u8);
             }
+            termion::event::Key::Ctrl(c) => {
+                let ascii = (c.to_uppercase().next().unwrap() as u8) - 64;
+                current_writer.send(ascii);
+            }
             _ => {}
         }
     }

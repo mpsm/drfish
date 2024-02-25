@@ -106,6 +106,10 @@ impl DrFishCli {
                 }
             }
 
+            termion::event::Key::Ctrl(_) => {
+                self.writer.write_key(key);
+            }
+
             termion::event::Key::Char(c) => {
                 // FIXME: this is a hack to send CRLF to the serial port
                 if c == '\n' {
